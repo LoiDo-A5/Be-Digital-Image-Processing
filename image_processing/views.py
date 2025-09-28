@@ -29,7 +29,9 @@ from .utils import (
     quantize_colors,
     create_color_mask,
     segment_image_by_color,
-    hex_to_rgb
+    hex_to_rgb,
+    gmm_quantize_colors,
+    assign_color_names
 )
 
 logger = logging.getLogger(__name__)
@@ -506,6 +508,37 @@ class ColorAnalysisView(APIView):
                         'segmentation_method': segmentation_method,
                         'num_segments': len(masks),
                         'segments': segment_masks
+                    })
+
+                elif mode == 'gmm_quantization':
+                    n_components = serializer.validated_data['n_components']
+                    covariance_type = serializer.validated_data['covariance_type']
+                    
+                    # Apply GMM-based quantization
+                    quant_bgr, palette = gmm_quantize_colors(cv2_image, n_components=n_components, covariance_type=covariance_type)
+                    result_pil = cv2_to_pil(quant_bgr)
+                    base64_img = image_to_base64(result_pil)
+                    
+                    response_data.update({
+                        'message': f'GMM quantization to {n_components} components completed',
+                        'quantized_image': base64_img,
+                        'palette': palette,
+                        'n_components': n_components,
+                        'covariance_type': covariance_type
+                    })
+
+                elif mode == 'color_name_palette':
+                    # First, compute dominant colors by k-means (reusing quantize_colors)
+                    palette_size = serializer.validated_data['palette_size']
+                    _, palette = quantize_colors(cv2_image, k=palette_size)
+                    
+                    # Assign nearest color names
+                    enriched = assign_color_names(palette)
+                    
+                    response_data.update({
+                        'message': 'Color names assigned to palette successfully',
+                        'palette': enriched,
+                        'palette_size': palette_size
                     })
                 
                 return Response(response_data, status=status.HTTP_200_OK)

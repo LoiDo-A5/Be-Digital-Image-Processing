@@ -62,9 +62,9 @@ class ColorAnalysisSerializer(serializers.Serializer):
     """Serializer for color analysis with multiple modes"""
     image = serializers.ImageField(required=True)
     mode = serializers.ChoiceField(
-        choices=['dominant_colors', 'color_detection', 'color_quantization', 'color_mask', 'multi_segment'],
+        choices=['dominant_colors', 'color_detection', 'color_quantization', 'color_mask', 'multi_segment', 'gmm_quantization', 'color_name_palette'],
         required=True,
-        help_text="Analysis mode: dominant_colors, color_detection, color_quantization, color_mask, multi_segment"
+        help_text="Analysis mode: dominant_colors, color_detection, color_quantization, color_mask, multi_segment, gmm_quantization, color_name_palette"
     )
     
     # Parameters for dominant_colors mode
@@ -116,6 +116,23 @@ class ColorAnalysisSerializer(serializers.Serializer):
         default='kmeans',
         help_text="Segmentation method: kmeans or watershed"
     )
+
+    # Parameters for gmm_quantization mode
+    n_components = serializers.IntegerField(
+        default=8, min_value=2, max_value=32,
+        help_text="Number of Gaussian components for GMM quantization (2-32)"
+    )
+    covariance_type = serializers.ChoiceField(
+        choices=['full', 'tied', 'diag', 'spherical'],
+        default='tied',
+        help_text="Covariance type for GaussianMixture"
+    )
+
+    # Parameters for color_name_palette mode
+    palette_size = serializers.IntegerField(
+        default=8, min_value=2, max_value=20,
+        help_text="Number of colors to extract before assigning nearest color names"
+    )
     
     def validate(self, data):
         """Custom validation based on mode"""
@@ -144,5 +161,5 @@ class ColorAnalysisSerializer(serializers.Serializer):
             if data.get('color_space') == 'HSV':
                 if not (0 <= lower_range[0] <= 179 and 0 <= upper_range[0] <= 179):
                     raise serializers.ValidationError("HSV Hue values must be between 0-179")
-        
+
         return data

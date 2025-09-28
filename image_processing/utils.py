@@ -349,3 +349,107 @@ def rgb_to_hsv_range(rgb_color, tolerance=10):
         'lower': lower_hsv.tolist(),
         'upper': upper_hsv.tolist()
     }
+
+
+# ================= ML-based color analysis utilities =================
+def _sample_pixels_for_model(cv2_image, max_samples=50000, colorspace='BGR'):
+    """Randomly sample up to max_samples pixels for model fitting to speed up."""
+    img = cv2_image
+    h, w = img.shape[:2]
+    data = img.reshape(-1, 3)
+    n = data.shape[0]
+    if n > max_samples:
+        idx = np.random.choice(n, size=max_samples, replace=False)
+        data = data[idx]
+    if colorspace == 'RGB':
+        data = data[:, ::-1]
+    return np.float32(data)
+
+
+def gmm_quantize_colors(cv2_image, n_components=8, covariance_type='tied'):
+    """
+    Reduce colors using Gaussian Mixture Model.
+    Returns: quantized_image (BGR), palette (list of dict with rgb, hex, weight).
+    """
+    from sklearn.mixture import GaussianMixture
+
+    # Fit GMM on sampled RGB pixels for better color representation
+    samples_rgb = _sample_pixels_for_model(cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB), colorspace='RGB')
+    gmm = GaussianMixture(n_components=n_components, covariance_type=covariance_type, random_state=42)
+    gmm.fit(samples_rgb)
+
+    # Use means as palette centers in RGB
+    centers_rgb = np.clip(gmm.means_, 0, 255).astype(np.uint8)
+    weights = gmm.weights_
+
+    # Assign each pixel to nearest component (predict)
+    h, w = cv2_image.shape[:2]
+    pixels_rgb = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB).reshape(-1, 3)
+    labels = gmm.predict(np.float32(pixels_rgb))
+    quantized_rgb = centers_rgb[labels].reshape(h, w, 3)
+    quantized_bgr = cv2.cvtColor(quantized_rgb, cv2.COLOR_RGB2BGR)
+
+    # Build palette with weights
+    palette = []
+    for i, center in enumerate(centers_rgb):
+        color_rgb = [int(center[0]), int(center[1]), int(center[2])]
+        hex_color = '#{:02x}{:02x}{:02x}'.format(*color_rgb)
+        palette.append({
+            'color_rgb': color_rgb,
+            'color_hex': hex_color,
+            'weight': float(weights[i] * 100.0)
+        })
+
+    # Sort palette by weight desc
+    palette.sort(key=lambda x: x['weight'], reverse=True)
+    return quantized_bgr, palette
+
+
+# Color name mapping (CSS3 basic color set)
+_CSS3_COLORS = [
+    ("black", [0, 0, 0]), ("white", [255, 255, 255]), ("red", [255, 0, 0]),
+    ("lime", [0, 255, 0]), ("blue", [0, 0, 255]), ("yellow", [255, 255, 0]),
+    ("cyan", [0, 255, 255]), ("magenta", [255, 0, 255]), ("silver", [192, 192, 192]),
+    ("gray", [128, 128, 128]), ("maroon", [128, 0, 0]), ("olive", [128, 128, 0]),
+    ("green", [0, 128, 0]), ("purple", [128, 0, 128]), ("teal", [0, 128, 128]),
+    ("navy", [0, 0, 128]), ("orange", [255, 165, 0]), ("pink", [255, 192, 203]),
+    ("brown", [165, 42, 42]), ("gold", [255, 215, 0])
+]
+
+
+def _rgb_to_lab(rgb):
+    # rgb list to Lab using OpenCV
+    rgb_pixel = np.uint8([[rgb]])  # shape (1,1,3)
+    lab_pixel = cv2.cvtColor(rgb_pixel, cv2.COLOR_RGB2LAB)[0][0]
+    return lab_pixel.astype(np.float32)
+
+
+def _delta_e_lab(lab1, lab2):
+    # Simple Euclidean in Lab space
+    return float(np.linalg.norm(lab1 - lab2))
+
+
+def nearest_color_name(rgb):
+    """Find nearest CSS3 color name for a given rgb list using Lab distance."""
+    lab = _rgb_to_lab(rgb)
+    best = (None, 1e9)
+    for name, ref_rgb in _CSS3_COLORS:
+        d = _delta_e_lab(lab, _rgb_to_lab(ref_rgb))
+        if d < best[1]:
+            best = (name, d)
+    return {'name': best[0], 'distance': best[1]}
+
+
+def assign_color_names(palette):
+    """
+    Given a palette list [{'color_rgb': [r,g,b], 'color_hex': '#xxxxxx', ...}],
+    append nearest color names.
+    """
+    enriched = []
+    for item in palette:
+        info = nearest_color_name(item['color_rgb'])
+        new_item = dict(item)
+        new_item['nearest_name'] = info['name']
+        new_item['name_distance'] = info['distance']
+        enriched.append(new_item)
+    return enriched
