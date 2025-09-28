@@ -1,0 +1,16 @@
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service-$ENVIRONMENT_NAME
+  namespace: default
+  labels:
+    app: my-app-$ENVIRONMENT_NAME
+spec:
+  selector:
+    app: my-app-$ENVIRONMENT_NAME
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer

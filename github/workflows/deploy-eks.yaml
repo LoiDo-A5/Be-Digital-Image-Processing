@@ -1,0 +1,68 @@
+name: Deploy to EKS
+
+on:
+  push:
+    branches:
+      - main # Hoặc branch bạn muốn dùng để deploy
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPOSITORY: your-ecr-repository-name # Thay bằng tên ECR repository của bạn
+  EKS_CLUSTER_NAME: your-eks-cluster-name # Thay bằng tên EKS cluster của bạn
+  ENVIRONMENT_NAME: production # Hoặc có thể dựa trên branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build and push Docker image
+        id: build-push-image
+        run: |
+          IMAGE_TAG=$(echo "${{ github.sha }}" | head -c 8)
+          docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} .
+          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          install-location: /usr/local/bin/kubectl
+          check-latest: true
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} --kubeconfig ~/.kube/config
+          mkdir -p ~/.kube
+          cp /tmp/kubeconfig ~/.kube/config
+          chmod go-rwx ~/.kube/config
+
+      - name: Apply Kubernetes manifests
+        run: |
+          envsubst < k8s/deployment.yaml | kubectl apply -f - --kubeconfig ~/.kube/config
+          envsubst < k8s/service.yaml | kubectl apply -f - --kubeconfig ~/.kube/config
+          if [ -f "k8s/hpa.yaml" ]; then
+            envsubst < k8s/hpa.yaml | kubectl apply -f - --kubeconfig ~/.kube/config
+          fi
+        env:
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME }}
